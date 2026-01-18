@@ -2,7 +2,8 @@
 import os
 
 # not ideal to put that here
-os.environ["CUDA_HOME"] = os.environ["CONDA_PREFIX"]
+if "CONDA_PREFIX" in os.environ:
+    os.environ["CUDA_HOME"] = os.environ["CONDA_PREFIX"]
 os.environ["LIDRA_SKIP_INIT"] = "true"
 
 import sys
@@ -91,13 +92,38 @@ class Inference:
         check_hydra_safety(config, WHITELIST_FILTERS, BLACKLIST_FILTERS)
         self._pipeline: InferencePipelinePointMap = instantiate(config)
 
+    # def merge_mask_to_rgba(self, image, mask):
+    #     mask = mask.astype(np.uint8) * 255
+    #     mask = mask[..., None]
+    #     # embed mask in alpha channel
+    #     rgba_image = np.concatenate([image[..., :3], mask], axis=-1)
+    #     return rgba_image
     def merge_mask_to_rgba(self, image, mask):
-        mask = mask.astype(np.uint8) * 255
+        # image: (H, W, 3)
+        # mask: (H, W) 或 (H, W, 1) 或 (H, W, 3)
+
+        # 先把 mask 转成 2D
+        if mask.ndim == 3:
+            # 取第一通道就行
+            mask = mask[..., 0]
+
+        # 二值化 + 转 uint8
+        mask = (mask > 0).astype(np.uint8) * 255  # 0 or 255
+
+        # 如果 mask 尺寸和 image 不一致，就 resize 到完全一致
+        if mask.shape[:2] != image.shape[:2]:
+            from PIL import Image
+            # PIL resize 参数是 (width, height)
+            mask_pil = Image.fromarray(mask)
+            mask_pil = mask_pil.resize((image.shape[1], image.shape[0]), resample=Image.NEAREST)
+            mask = np.array(mask_pil)
+
+        # 加上通道维度，变成 (H, W, 1)
         mask = mask[..., None]
-        # embed mask in alpha channel
+
+        # 拼成 RGBA
         rgba_image = np.concatenate([image[..., :3], mask], axis=-1)
         return rgba_image
-
     def __call__(
         self,
         image: Union[Image.Image, np.ndarray],
@@ -359,6 +385,7 @@ def load_mask(path):
 def load_single_mask(folder_path, index=0, extension=".png"):
     masks = load_masks(folder_path, [index], extension)
     return masks[0]
+
 
 
 def load_masks(folder_path, indices_list=None, extension=".png"):
