@@ -191,8 +191,9 @@ def main(args):
             gs_path = output_dir / f"object_{i:03d}_splat.ply"
             output["gs"].save_ply(str(gs_path))
             print(f"Saved Gaussian splat to: {gs_path}")
-            output["glb"].export(str(gs_path).replace('_splat.ply', '_mesh.ply'))
-            print(f"Saved  mesh to: {gs_path.replace('_splat.ply', '_mesh.ply')}")
+            mesh_path = output_dir / f"object_{i:03d}_mesh.ply"
+            output["glb"].export(str(mesh_path))
+            print(f"Saved  mesh to: {mesh_path}")
            
             # Save mask visualization
             mask_path = output_dir / f"object_{i:03d}_mask.png"
