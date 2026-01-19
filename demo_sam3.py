@@ -49,7 +49,7 @@ def get_masks_from_sam3(processor, image_path, prompt):
     Args:
         processor: SAM3Processor instance
         image_path: Path to input image
-        prompt: Text prompt for segmentation
+        prompt: Text prompt for segmentation (string or list of strings)
 
     Returns:
         masks: Tensor of binary masks (N, H, W)
@@ -60,22 +60,41 @@ def get_masks_from_sam3(processor, image_path, prompt):
     # Load image
     image = Image.open(image_path).convert("RGB")
 
-    # Set image in processor
-    print(f"Processing image: {image_path}")
-    inference_state = processor.set_image(image)
+    # Handle both single prompt (string) and multiple prompts (list)
+    prompts = [prompt] if isinstance(prompt, str) else prompt
 
-    # Run SAM 3 with text prompt
-    print(f"Prompting SAM 3 with text: '{prompt}'")
-    output = processor.set_text_prompt(state=inference_state, prompt=prompt)
+    all_masks = []
+    all_boxes = []
+    all_scores = []
 
-    # Extract results
-    masks = output["masks"].squeeze(1)  # Shape: (N, H, W) - N masks
-    boxes = output["boxes"]  # Shape: (N, 4) - N bounding boxes
-    scores = output["scores"]  # Shape: (N,) - N confidence scores
+    for p in prompts:
+        # Set image in processor
+        print(f"Processing image: {image_path}")
+        inference_state = processor.set_image(image)
 
-    print(f"SAM 3 detected {len(masks)} object(s)")
+        # Run SAM 3 with text prompt
+        print(f"Prompting SAM 3 with text: '{p}'")
+        output = processor.set_text_prompt(state=inference_state, prompt=p)
 
-    return masks, boxes, scores, image
+        # Extract results
+        masks = output["masks"].squeeze(1)  # Shape: (N, H, W) - N masks
+        boxes = output["boxes"]  # Shape: (N, 4) - N bounding boxes
+        scores = output["scores"]  # Shape: (N,) - N confidence scores
+
+        print(f"SAM 3 detected {len(masks)} object(s) for prompt '{p}'")
+
+        all_masks.append(masks)
+        all_boxes.append(boxes)
+        all_scores.append(scores)
+
+    # Concatenate all results
+    all_masks = torch.cat(all_masks, dim=0)
+    all_boxes = torch.cat(all_boxes, dim=0)
+    all_scores = torch.cat(all_scores, dim=0)
+
+    print(f"Total SAM 3 detected {len(all_masks)} object(s) across all prompts")
+
+    return all_masks, all_boxes, all_scores, image
 
 
 def create_rgba_from_mask(image, mask):
@@ -230,14 +249,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SAM 3 + SAM3D Integration Demo")
 
     # Input/Output
-    parser.add_argument("--image_path", type=str, default='notebook/images/shutterstock_stylish_kidsroom_1640806567/image.png',
+    parser.add_argument("--image_path", type=str, default='/mnt/data/gaussianplant_data/newplant3/images/IMG_6796.JPG',
                         help="Path to input image")
-    parser.add_argument("--output_dir", type=str, default="outputs/sam3d_sam3",
+    parser.add_argument("--output_dir", type=str, default="outputs/newplant3/",
                         help="Directory to save outputs")
 
     # SAM 3 configuration
-    parser.add_argument("--prompt", type=str, default='toy',
-                        help="Text prompt for SAM 3 (e.g., 'potted plant', 'chair', 'toy')")
+    parser.add_argument("--prompt", type=str, nargs='+', default=['leaf','branch'],
+                        help="Text prompt(s) for SAM 3. Can be single string or multiple strings (e.g., 'potted plant' or 'leaf' 'branch')")
 
     # SAM3D configuration
     parser.add_argument("--config_path", type=str, default="checkpoints/hf/pipeline.yaml",
