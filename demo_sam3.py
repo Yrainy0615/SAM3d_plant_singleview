@@ -56,6 +56,7 @@ def get_masks_from_sam3(processor, image_path, prompt):
         boxes: Tensor of bounding boxes (N, 4) in [x1, y1, x2, y2] format
         scores: Tensor of confidence scores (N,)
         image: PIL Image
+        prompt_groups: List of tuples (prompt_name, mask_indices) for grouping
     """
     # Load image
     image = Image.open(image_path).convert("RGB")
@@ -66,6 +67,8 @@ def get_masks_from_sam3(processor, image_path, prompt):
     all_masks = []
     all_boxes = []
     all_scores = []
+    prompt_groups = []  # Track which masks belong to which prompt
+    current_idx = 0
 
     for p in prompts:
         # Set image in processor
@@ -81,7 +84,13 @@ def get_masks_from_sam3(processor, image_path, prompt):
         boxes = output["boxes"]  # Shape: (N, 4) - N bounding boxes
         scores = output["scores"]  # Shape: (N,) - N confidence scores
 
-        print(f"SAM 3 detected {len(masks)} object(s) for prompt '{p}'")
+        num_masks = len(masks)
+        print(f"SAM 3 detected {num_masks} object(s) for prompt '{p}'")
+
+        # Record which indices belong to this prompt
+        if num_masks > 0:
+            prompt_groups.append((p, list(range(current_idx, current_idx + num_masks))))
+            current_idx += num_masks
 
         all_masks.append(masks)
         all_boxes.append(boxes)
@@ -94,7 +103,7 @@ def get_masks_from_sam3(processor, image_path, prompt):
 
     print(f"Total SAM 3 detected {len(all_masks)} object(s) across all prompts")
 
-    return all_masks, all_boxes, all_scores, image
+    return all_masks, all_boxes, all_scores, image, prompt_groups
 
 
 def create_rgba_from_mask(image, mask):
@@ -184,7 +193,7 @@ def main(args):
     sam3d_inference = setup_sam3d(config_path=args.config_path, compile=args.compile)
 
     # Get masks from SAM 3
-    masks, boxes, scores, image = get_masks_from_sam3(
+    masks, boxes, scores, image, prompt_groups = get_masks_from_sam3(
         sam3_processor,
         args.image_path,
         prompt=args.prompt
@@ -201,8 +210,8 @@ def main(args):
         # Run SAM3D
         try:
             output = run_sam3d_on_mask(
-                sam3d_inference, image, mask, 
-                seed=args.seed + i, 
+                sam3d_inference, image, mask,
+                seed=args.seed + i,
                 enable_mesh=args.enable_mesh
             )
 
@@ -213,7 +222,7 @@ def main(args):
             mesh_path = output_dir / f"object_{i:03d}_mesh.ply"
             output["glb"].export(str(mesh_path))
             print(f"Saved  mesh to: {mesh_path}")
-           
+
             # Save mask visualization
             mask_path = output_dir / f"object_{i:03d}_mask.png"
             # Convert tensor to numpy if needed
@@ -241,8 +250,55 @@ def main(args):
             print(f"Error processing object {i+1}: {e}")
             continue
 
+    # Process combined outputs for each prompt group
+    print("\n=== Generating combined outputs for each prompt ===")
+    for prompt_name, mask_indices in prompt_groups:
+        print(f"\n--- Processing combined output for prompt: '{prompt_name}' ({len(mask_indices)} masks) ---")
+
+        # Combine all masks from this prompt using logical OR
+        combined_mask = torch.zeros_like(masks[0])
+        for idx in mask_indices:
+            combined_mask = torch.logical_or(combined_mask, masks[idx] > 0.5)
+        combined_mask = combined_mask.float()
+
+        # Save combined mask
+        combined_mask_path = output_dir / f"combined_{prompt_name}_mask.png"
+        combined_mask_np = combined_mask.cpu().numpy()
+        combined_mask_img = Image.fromarray((combined_mask_np * 255).astype(np.uint8))
+        combined_mask_img.save(combined_mask_path)
+        print(f"Saved combined mask to: {combined_mask_path}")
+
+        # Save combined RGBA
+        combined_rgba_path = output_dir / f"combined_{prompt_name}_rgba.png"
+        combined_rgba = create_rgba_from_mask(image, combined_mask)
+        combined_rgba.save(combined_rgba_path)
+        print(f"Saved combined RGBA to: {combined_rgba_path}")
+
+        # Run SAM3D on combined mask
+        try:
+            combined_output = run_sam3d_on_mask(
+                sam3d_inference, image, combined_mask,
+                seed=args.seed + 1000,  # Use different seed for combined
+                enable_mesh=args.enable_mesh
+            )
+
+            # Save combined Gaussian splat
+            combined_gs_path = output_dir / f"combined_{prompt_name}_splat.ply"
+            combined_output["gs"].save_ply(str(combined_gs_path))
+            print(f"Saved combined Gaussian splat to: {combined_gs_path}")
+
+            # Save combined mesh
+            combined_mesh_path = output_dir / f"combined_{prompt_name}_mesh.ply"
+            combined_output["glb"].export(str(combined_mesh_path))
+            print(f"Saved combined mesh to: {combined_mesh_path}")
+
+        except Exception as e:
+            print(f"Error processing combined output for prompt '{prompt_name}': {e}")
+            continue
+
     print(f"\nAll done! Results saved to: {output_dir}")
     print(f"Total objects reconstructed: {len(masks)}")
+    print(f"Total combined outputs: {len(prompt_groups)}")
 
 
 if __name__ == "__main__":
